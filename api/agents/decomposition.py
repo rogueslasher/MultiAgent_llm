@@ -1,6 +1,7 @@
 import hashlib
 import time
 import json
+from api.context import BudgetManager, compress, count_tokens
 from api.llm import get_client, get_model
 from db import get_pool
 from api.context import (
@@ -84,8 +85,63 @@ def _resolve_execution_order(subtasks: list[SubTask]) -> list[list[SubTask]]:
 
     return waves
 
-
 async def run(ctx: SharedContext) -> AgentOutput:
+    pool = await get_pool()
+    client = get_client()
+    model = get_model()
+    prompt = DECOMPOSITION_PROMPT.format(query=ctx.query)
+
+    budget_manager = BudgetManager(ctx)
+    budget_manager.declare(AgentID.DECOMPOSITION.value, ctx.token_budgets.get(AgentID.DECOMPOSITION.value, 2048))
+
+    if budget_manager.needs_compression(AgentID.DECOMPOSITION.value, prompt):
+        prompt = await compress(prompt, count_tokens(prompt), ctx.job_id)
+
+    budget_manager.consume(AgentID.DECOMPOSITION.value, prompt)
+
+    t0 = time.time()
+    response = await client.chat.completions.create(
+        model=model,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"},
+    )
+    latency_ms = int((time.time() - t0) * 1000)
+    token_count = response.usage.prompt_tokens + response.usage.completion_tokens
+    raw = response.choices[0].message.content.strip()
+
+    budget_manager.consume(AgentID.DECOMPOSITION.value, raw)
+
+    try:
+        data = json.loads(raw)
+        subtasks = [SubTask(**st) for st in data["subtasks"]]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        await _log(pool, ctx.job_id, "parse_error",
+                   {"raw": raw}, prompt, raw, latency_ms, token_count)
+        subtasks = []
+
+    waves = _resolve_execution_order(subtasks)
+    for i, wave in enumerate(waves):
+        for st in wave:
+            st.status = TaskStatus.DONE if i == 0 else TaskStatus.PENDING
+
+    output = AgentOutput(
+        agent_id=AgentID.DECOMPOSITION,
+        output=json.dumps([st.model_dump() for st in subtasks]),
+        subtasks=subtasks,
+        token_count=token_count,
+    )
+
+    ctx.agent_outputs[AgentID.DECOMPOSITION.value] = output
+
+    await _log(
+        pool, ctx.job_id, "agent_complete",
+        {"subtask_count": len(subtasks), "waves": len(waves)},
+        prompt, raw, latency_ms, token_count,
+    )
+
+    return output
+
     pool = await get_pool()
     client = get_client()
     model = get_model()
