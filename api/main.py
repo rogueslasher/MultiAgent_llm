@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from db import get_pool, close_pool
-import os
+from api.routes.jobs import router as jobs_router
+from api.routes.eval import router as eval_router
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -12,7 +14,12 @@ async def lifespan(app: FastAPI):
     yield
     await close_pool()
 
+
 app = FastAPI(title="mega-ai", lifespan=lifespan)
+
+app.include_router(jobs_router)
+app.include_router(eval_router)
+
 
 @app.get("/health")
 async def health():
