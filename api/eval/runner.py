@@ -5,6 +5,7 @@ from db import get_pool
 from api.context.schema import SharedContext
 from api.pipeline import run_pipeline
 from api.eval.cases import EVAL_CASES, EvalCase
+from api.eval.runner import run_eval, compute_delta
 from api.eval.scorer import score_case, CaseScore
 
 
@@ -138,3 +139,62 @@ def _build_summary(results: list[CaseScore]) -> dict:
     }
 
     return summary
+
+async def compute_delta(
+    original_eval_run_id: str,
+    new_eval_run_id: str,
+) -> dict:
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        original_cases = await conn.fetch("""
+            SELECT case_id, score_correctness, score_citation,
+                   score_contradiction, score_tool_efficiency,
+                   score_budget_compliance, score_critique_agreement
+            FROM eval_cases
+            WHERE eval_run_id = $1
+        """, original_eval_run_id)
+
+        new_cases = await conn.fetch("""
+            SELECT case_id, score_correctness, score_citation,
+                   score_contradiction, score_tool_efficiency,
+                   score_budget_compliance, score_critique_agreement
+            FROM eval_cases
+            WHERE eval_run_id = $1
+        """, new_eval_run_id)
+
+    original_map = {r["case_id"]: dict(r) for r in original_cases}
+    new_map = {r["case_id"]: dict(r) for r in new_cases}
+
+    dimensions = [
+        "score_correctness", "score_citation", "score_contradiction",
+        "score_tool_efficiency", "score_budget_compliance",
+        "score_critique_agreement",
+    ]
+
+    delta = {}
+    for case_id, new_scores in new_map.items():
+        if case_id not in original_map:
+            continue
+        original_scores = original_map[case_id]
+        delta[case_id] = {
+            dim: round(
+                (new_scores[dim] or 0) - (original_scores[dim] or 0), 3
+            )
+            for dim in dimensions
+        }
+
+    overall_delta = {}
+    for dim in dimensions:
+        changes = [
+            delta[case_id][dim]
+            for case_id in delta
+        ]
+        overall_delta[dim] = round(
+            sum(changes) / len(changes) if changes else 0, 3
+        )
+
+    return {
+        "per_case": delta,
+        "overall": overall_delta,
+    }

@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from db import get_pool, close_pool
 from api.routes.jobs import router as jobs_router
 from api.routes.eval import router as eval_router
+from api.routes.rewrites import router as rewrites_router
 
 
 @asynccontextmanager
@@ -19,6 +20,7 @@ app = FastAPI(title="mega-ai", lifespan=lifespan)
 
 app.include_router(jobs_router)
 app.include_router(eval_router)
+app.include_router(rewrites_router)
 
 
 @app.get("/health")

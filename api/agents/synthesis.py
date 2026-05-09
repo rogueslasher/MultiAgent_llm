@@ -3,6 +3,7 @@ import time
 import json
 from api.context import BudgetManager, compress, count_tokens
 from api.llm import get_client, get_model
+from api.tools.executor import call as tool_call
 from db import get_pool
 from api.context import (
     SharedContext,
@@ -106,15 +107,27 @@ async def run(ctx: SharedContext) -> AgentOutput:
     agent_outputs_text = _format_agent_outputs(ctx)
     flagged_claims_text = _format_flagged_claims(ctx)
 
-    prompt = SYNTHESIS_PROMPT.format(
+   prompt = SYNTHESIS_PROMPT.format(
         query=ctx.query,
         agent_outputs=agent_outputs_text,
         flagged_claims=flagged_claims_text,
     )
 
+    # self-reflection before synthesizing — check for contradictions in own previous outputs
+    reflection = await tool_call(
+        tool_name="self_reflection",
+        input_data={"requesting_agent": AgentID.SYNTHESIS.value},
+        job_id=ctx.job_id,
+        agent_id=AgentID.SYNTHESIS.value,
+        ctx=ctx,
+    )
+    if reflection.success and reflection.data.get("contradictions_found"):
+        contradiction_context = json.dumps(reflection.data["contradictions_found"])
+        prompt = prompt + f"\n\nSelf-reflection detected these additional contradictions:\n{contradiction_context}"
+
     if budget_manager.needs_compression(AgentID.SYNTHESIS.value, prompt):
         prompt = await compress(prompt, count_tokens(prompt), ctx.job_id)
-
+        
     budget_manager.consume(AgentID.SYNTHESIS.value, prompt)
 
     t0 = time.time()

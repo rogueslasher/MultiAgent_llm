@@ -1,7 +1,6 @@
 import hashlib
 import time
 import json
-from api.context import BudgetManager, compress, count_tokens
 from api.llm import get_client, get_model
 from db import get_pool
 from api.context import (
@@ -11,6 +10,8 @@ from api.context import (
     Chunk,
     Citation,
 )
+from api.context import BudgetManager, compress, count_tokens
+from api.tools.executor import call as tool_call
 
 RETRIEVAL_PROMPT = """You are a retrieval agent. Given a query and a set of text chunks, identify the most relevant chunks for answering the query.
 
@@ -95,11 +96,6 @@ def _format_chunks(chunks: list[Chunk]) -> str:
 
 
 def _get_mock_chunks(query: str) -> list[Chunk]:
-    """
-    In production this would query a vector store.
-    For now returns seeded chunks based on query keywords
-    so the pipeline is fully functional end to end.
-    """
     return [
         Chunk(
             chunk_id="chunk_001",
@@ -136,18 +132,41 @@ async def run(ctx: SharedContext) -> AgentOutput:
     # get subtasks from decomposition if available
     decomp_output = ctx.agent_outputs.get(AgentID.DECOMPOSITION.value)
     if decomp_output and decomp_output.subtasks:
-        retrieval_queries = [
+        queries = [
             st.query for st in decomp_output.subtasks
             if st.type == "retrieval"
         ] or [ctx.query]
     else:
-        retrieval_queries = [ctx.query]
+        queries = [ctx.query]
 
     all_chunks = []
     total_tokens = 0
 
-    for query in retrieval_queries:
-        raw_chunks = _get_mock_chunks(query)
+    for query in queries:
+        # web search tool call to augment retrieval
+        search_result = await tool_call(
+            tool_name="web_search",
+            input_data={"query": query},
+            job_id=ctx.job_id,
+            agent_id=AgentID.RAG.value,
+            ctx=ctx,
+        )
+
+        web_chunks = []
+        if search_result.success:
+            web_chunks = [
+                Chunk(
+                    chunk_id=f"web_{j}",
+                    source=r["url"],
+                    content=r["snippet"],
+                    relevance_score=r["relevance_score"],
+                )
+                for j, r in enumerate(
+                    search_result.data.get("results", [])[:2]
+                )
+            ]
+
+        raw_chunks = _get_mock_chunks(query) + web_chunks
         chunks_text = _format_chunks(raw_chunks)
         prompt = RETRIEVAL_PROMPT.format(query=query, chunks=chunks_text)
 
@@ -204,7 +223,9 @@ async def run(ctx: SharedContext) -> AgentOutput:
     )
 
     if budget_manager.needs_compression(AgentID.RAG.value, reasoning_prompt):
-        reasoning_prompt = await compress(reasoning_prompt, count_tokens(reasoning_prompt), ctx.job_id)
+        reasoning_prompt = await compress(
+            reasoning_prompt, count_tokens(reasoning_prompt), ctx.job_id
+        )
 
     budget_manager.consume(AgentID.RAG.value, reasoning_prompt)
 
@@ -254,7 +275,7 @@ async def run(ctx: SharedContext) -> AgentOutput:
         {
             "chunks_used": len(unique_chunks),
             "citations": len(citations),
-            "hops": len(retrieval_queries),
+            "hops": len(queries),
         },
         reasoning_prompt, raw, latency_ms, token_count,
     )
