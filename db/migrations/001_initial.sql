@@ -1,6 +1,6 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
-CREATE TABLE jobs (
+CREATE TABLE IF NOT EXISTS jobs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     query TEXT NOT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'pending',
@@ -8,7 +8,7 @@ CREATE TABLE jobs (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE agent_logs (
+CREATE TABLE IF NOT EXISTS agent_logs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     job_id UUID NOT NULL REFERENCES jobs(id),
     agent_id VARCHAR(50) NOT NULL,
@@ -22,7 +22,7 @@ CREATE TABLE agent_logs (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE tool_calls (
+CREATE TABLE IF NOT EXISTS tool_calls (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     job_id UUID NOT NULL REFERENCES jobs(id),
     agent_id VARCHAR(50) NOT NULL,
@@ -36,7 +36,7 @@ CREATE TABLE tool_calls (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE eval_runs (
+CREATE TABLE IF NOT EXISTS eval_runs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     triggered_by VARCHAR(50) NOT NULL DEFAULT 'manual',
     prompt_rewrite_id UUID,
@@ -47,7 +47,7 @@ CREATE TABLE eval_runs (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE eval_cases (
+CREATE TABLE IF NOT EXISTS eval_cases (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     eval_run_id UUID NOT NULL REFERENCES eval_runs(id),
     case_id VARCHAR(50) NOT NULL,
@@ -66,7 +66,7 @@ CREATE TABLE eval_cases (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE prompt_rewrites (
+CREATE TABLE IF NOT EXISTS prompt_rewrites (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     eval_run_id UUID NOT NULL REFERENCES eval_runs(id),
     agent_id VARCHAR(50) NOT NULL,
@@ -80,7 +80,7 @@ CREATE TABLE prompt_rewrites (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_agent_logs_job_id ON agent_logs(job_id);
-CREATE INDEX idx_tool_calls_job_id ON tool_calls(job_id);
-CREATE INDEX idx_eval_cases_eval_run_id ON eval_cases(eval_run_id);
-CREATE INDEX idx_prompt_rewrites_status ON prompt_rewrites(status);
+CREATE INDEX IF NOT EXISTS idx_agent_logs_job_id ON agent_logs(job_id);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_job_id ON tool_calls(job_id);
+CREATE INDEX IF NOT EXISTS idx_eval_cases_eval_run_id ON eval_cases(eval_run_id);
+CREATE INDEX IF NOT EXISTS idx_prompt_rewrites_status ON prompt_rewrites(status);
