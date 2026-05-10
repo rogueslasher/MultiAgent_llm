@@ -205,69 +205,66 @@ Example response:
 ```
 
 ---
-
 ## Architecture
-┌──────────────────────────────────────────────────────────┐
-│                        Client                            │
-│                SSE stream / REST responses               │
-└─────────────────────────┬────────────────────────────────┘
-│
-┌─────────────────────────▼────────────────────────────────┐
-│                    FastAPI (api/)                        │
-│   POST /query  GET /trace  GET /eval  POST /rewrites     │
-└──────────┬───────────────────────────┬───────────────────┘
-│                           │
-▼                           ▼
-┌──────────────────┐       ┌───────────────────────────────┐
-│    Pipeline      │       │       Background Worker        │
-│  run_pipeline()  │       │   Redis queue — async jobs     │
-└────────┬─────────┘       └───────────────────────────────┘
-│
-▼
-┌──────────────────────────────────────────────────────────┐
-│                      Orchestrator                        │
-│          dynamic LLM routing + justification log         │
-└───────┬──────────┬──────────┬──────────┬─────────────────┘
-│          │          │          │
-▼          ▼          ▼          ▼
-┌────────────┐ ┌────────┐ ┌─────────┐ ┌──────────┐
-│Decomp-     │ │  RAG   │ │Critique │ │Synthesis │
-│osition     │ │multi-  │ │per-claim│ │resolves  │
-│typed tasks │ │hop +   │ │scoring  │ │contradic-│
-│dep. graph  │ │chunks  │ │span flag│ │tions +   │
-│            │ │        │ │         │ │provenance│
-└────────────┘ └────────┘ └─────────┘ └──────────┘
-│          │          │          │
-└──────────┴──────────┴──────────┘
-│
-▼
-┌──────────────────────────────────────────────────────────┐
-│                    Shared Context                        │
-│   SharedContext pydantic object — all agents read/write  │
-│       Orchestrator mediates all handoffs                 │
-└──────────────────────────┬───────────────────────────────┘
-│
-▼
-┌──────────────────────────────────────────────────────────┐
-│                    Budget Manager                        │
-│      token tracking per agent — compression on overflow  │
-└──────────────────────────┬───────────────────────────────┘
-│
-▼
-┌──────────────────────────────────────────────────────────┐
-│                       Tools                              │
-│   web_search | code_sandbox | data_lookup | self_reflect │
-│   executor.py — failure contracts + retry + logging      │
-└──────────────────────────┬───────────────────────────────┘
-│
-▼
-┌──────────────────────────────────────────────────────────┐
-│                     PostgreSQL                           │
-│  jobs | agent_logs | tool_calls | eval_runs | eval_cases │
-│  prompt_rewrites                                         │
-└──────────────────────────────────────────────────────────┘
 
----
+```mermaid
+graph TD
+    Client -->|HTTP POST /query| API
+    Client -->|HTTP GET /trace| API
+    Client -->|HTTP GET /eval/latest| API
+    Client -->|HTTP POST /rewrites/review| API
+    Client -->|HTTP POST /eval/rerun| API
+
+    API -->|SSE stream| Client
+    API -->|push job| Redis
+    API -->|run inline| Pipeline
+
+    Redis -->|pop job| Worker
+    Worker -->|run| Pipeline
+
+    Pipeline --> Orchestrator
+
+    Orchestrator -->|route| Decomposition
+    Orchestrator -->|route| RAG
+    Orchestrator -->|route| Critique
+    Orchestrator -->|route| Synthesis
+
+    Decomposition -->|write| SharedContext
+    RAG -->|write| SharedContext
+    Critique -->|write| SharedContext
+    Synthesis -->|write| SharedContext
+
+    SharedContext -->|read| Orchestrator
+
+    RAG -->|call| WebSearch
+    RAG -->|call| DataLookup
+    Synthesis -->|call| SelfReflection
+    Decomposition -->|call| CodeSandbox
+
+    WebSearch -->|result| Executor
+    DataLookup -->|result| Executor
+    SelfReflection -->|result| Executor
+    CodeSandbox -->|result| Executor
+
+    Executor -->|log| PostgreSQL
+
+    BudgetManager -->|check| SharedContext
+    BudgetManager -->|trigger| Compression
+
+    Orchestrator -->|log| PostgreSQL
+    Decomposition -->|log| PostgreSQL
+    RAG -->|log| PostgreSQL
+    Critique -->|log| PostgreSQL
+    Synthesis -->|log| PostgreSQL
+
+    EvalRunner -->|run| Pipeline
+    EvalRunner -->|store| PostgreSQL
+    MetaAgent -->|read| PostgreSQL
+    MetaAgent -->|propose| PostgreSQL
+
+    API -->|query| PostgreSQL
+    pgAdmin -->|query| PostgreSQL
+```
 
 ## Agents
 
@@ -397,7 +394,6 @@ As permitted by the assessment guidelines, I used AI tooling during this project
 ### Tools used
 
 - Claude (claude.ai) — used occasionally for boilerplate generation and debugging assistance
-- No Copilot, Cursor, or other AI tooling
 
 ### Where AI assisted
 
@@ -418,4 +414,3 @@ I made the decision to:
 - Keep mock chunks rather than over-engineering a vector store for a take-home assessment
 - Structure inter-agent communication through a shared context object so agents are fully decoupled
 
-The git history reflects how I actually built this — incrementally, one logical unit at a time.
